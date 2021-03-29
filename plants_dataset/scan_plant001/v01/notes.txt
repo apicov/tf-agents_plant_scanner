@@ -1,0 +1,7 @@
+scan settings (ros)
+#move camera in circle 
+center = np.array([0.0,0.0])
+radius = .42
+n = 1440
+zcenter = 0.55 
+zcam = 0.3

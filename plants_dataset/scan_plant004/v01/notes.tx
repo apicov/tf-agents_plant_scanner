@@ -1,0 +1,7 @@
+#move camera in circle 
+        center = np.array([0.0,0.0])
+        radius = .6#0.42
+        n = 1440
+        zcenter = 0.35 #55
+        zcam = 0.35
+        cpoints = get_circle_points(center,radius,n)
