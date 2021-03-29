@@ -3,6 +3,8 @@ import numpy as np
 from os import listdir
 from os.path import isfile, join
 import gym
+import glob
+from PIL import Image
 
 KEEP_IMAGE = 22
 CLOCKWISE = 20
@@ -49,12 +51,12 @@ class ScannerEnv(gym.Env):
     A template to implement custom OpenAI Gym environments
     """
     metadata = {'render.modes': ['human']}
-    def __init__(self,inliers_ratios_file,setpoint=0.1,init_pos_inc_rst=False):
+    def __init__(self,inliers_ratios_file,dataset_path,setpoint=0.1,init_pos_inc_rst=False):
         super(ScannerEnv, self).__init__()
         #self.__version__ = "7.0.1"
         self.n_positions = 1440 #total of posible positions in env
         self.n_zones = 8 #number of zones by which the circle is divided
-        self.max_temp_moves_count = 10
+        self.max_temp_moves_count = 5
         self.previous_ref_img = 0
         self.previous_match_idx = 0
         self.previous_distance_to_ref_img=0
@@ -62,6 +64,10 @@ class ScannerEnv(gym.Env):
         self.total_moves = 0
         self.init_pos_inc_rst = init_pos_inc_rst #if false init position is random, if true, it starts in position 0 and increments by 1 position every reset
         self.init_pos_counter = 0
+        
+        #load image set
+        self.dataset_path = dataset_path
+        self.dataset = self.load_images(self.dataset_path)
         
         #[inliers ratio, distance from closest saved image, covered area (self.n_zones sections), number of actions executed since last save image action,
         #delta inliers ratio (difference beween last and current in ratio), delta distance (diff between las and current distance from closest saved image), 
@@ -100,6 +106,13 @@ class ScannerEnv(gym.Env):
 
         #writes a 1 on the index of corresponding kept image
         self.kept_im_map = np.zeros(self.n_positions,dtype='uint')
+        
+    def load_images(self,path):
+        imgs = []
+        img_files = glob.glob(path + '*.jpeg') #get all .jpeg files from folder path
+        for i in sorted(img_files):
+            imgs.append(Image.open(i))
+        return imgs
 
     @property
     def nA(self):
