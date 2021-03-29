@@ -54,7 +54,7 @@ class ScannerEnv(gym.Env):
         #self.__version__ = "7.0.1"
         self.n_positions = 1440 #total of posible positions in env
         self.n_zones = 8 #number of zones by which the circle is divided
-        self.max_temp_moves_count = 5
+        self.max_temp_moves_count = 10
         self.previous_ref_img = 0
         self.previous_match_idx = 0
         self.previous_distance_to_ref_img=0
@@ -256,7 +256,7 @@ class ScannerEnv(gym.Env):
         elif action == KEEP_IMAGE:
             reward = self.rwd_fn(self.previous_state[0],self.setpoint)
         else:
-            reward=  -1.0#-2.0
+            reward=  0#-1.0#-2.0
         return reward
 
 
