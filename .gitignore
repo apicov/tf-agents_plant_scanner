@@ -132,8 +132,8 @@ dmypy.json
 ##################################################
 #plants_dataset/
 policy/
-logs/
-
+#logs/
+plants_image_dataset/
 
 
 
