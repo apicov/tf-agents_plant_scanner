@@ -1,10 +1,10 @@
 {
- "agent": { "decay_steps": 180000, 
+ "agent": { "decay_steps": 45000, 
             "target_update_period": 100, 
             "gamma": 0.99},
 
  "rbuffer"   : {"max_length": 50000,
-                "sample_batch_size" : 512},
+                "sample_batch_size" : 256},
 
  "rnd_policy" : {   "num_steps": 5000 },
  
@@ -13,10 +13,10 @@
 
 
  "model"  : { "conv2d_1_filters": 0,
-              "fc_layer_params": [64,64],
+              "fc_layer_params": [512,0],
               "learning_rate" : 0.001
             },
             
- "misc" :  { "n_iterations" : 200000
+ "misc" :  { "n_iterations" : 50000
  		}
 }

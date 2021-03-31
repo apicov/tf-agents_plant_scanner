@@ -10,41 +10,6 @@ KEEP_IMAGE = 22
 CLOCKWISE = 20
 ANTICLOCKWISE = 21
 
-def ratio_test(matches,ratio_thr):
-    # Apply ratio test
-    good = []
-    for m,n in matches:
-        if m.distance < (ratio_thr*n.distance):
-            good.append(m)
-    return good
-
-def cross_check(matches01,matches10):
-    matches10_ = {(m.trainIdx, m.queryIdx) for m in matches10}
-    final_matches = [m for m in matches01 if (m.queryIdx,m.trainIdx) in matches10_]
-    return final_matches
-
-
-def get_matches(matcher,feat01,feat10):
-    ratio_thr = 0.75
-    matches01 = matcher.knnMatch(feat01,feat10, k=2)
-    matches10 = matcher.knnMatch(feat10,feat01, k=2)
-    good_matches01 = ratio_test(matches01,ratio_thr)
-    good_matches10 = ratio_test(matches10,ratio_thr)
-    matches = cross_check(good_matches01,good_matches10)
-    return matches
-
-
-def get_images(images_path):
-    files = sorted([f for f in listdir(images_path) if isfile(join(images_path, f))])
-    imgs = []
-    for i in files:
-        img = cv2.imread(images_path+i)
-        gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
-        gray = cv2.resize(gray, (320,240), interpolation = cv2.INTER_AREA)
-        imgs.append(gray)
-    return imgs
-
-
 
 class ScannerEnv(gym.Env):
     """
@@ -56,7 +21,7 @@ class ScannerEnv(gym.Env):
         #self.__version__ = "7.0.1"
         self.n_positions = 1440 #total of posible positions in env
         self.n_zones = 8 #number of zones by which the circle is divided
-        self.max_temp_moves_count = 5
+        self.max_temp_moves_count = 10
         self.previous_ref_img = 0
         self.previous_match_idx = 0
         self.previous_distance_to_ref_img=0
@@ -69,20 +34,23 @@ class ScannerEnv(gym.Env):
         self.dataset_path = dataset_path
         self.dataset = self.load_images(self.dataset_path)
         
-        #[inliers ratio, distance from closest saved image, covered area (self.n_zones sections), number of actions executed since last save image action,
-        #delta inliers ratio (difference beween last and current in ratio), delta distance (diff between las and current distance from closest saved image), 
+        self.im_ob_space = gym.spaces.Box(low=0, high=255, shape=(82,82,2))#, dtype=np.uint8)
+
+        #[distance from closest saved image, covered area (self.n_zones sections), number of actions executed since last save image action,
+        # delta distance (diff between las and current distance from closest saved image), 
         #direction of movement (clockwise or anticlockwise)]                                           
-        lowl = np.array([0,-200,0,0,-1.0,-20,0])
-        highl = np.array([1.0,200,self.n_zones,self.max_temp_moves_count,1.0,20,1])                                           
-        self.observation_space = gym.spaces.Box(lowl, highl, dtype=np.float32)
+        lowl = np.array([-200,0,0,-20,0])
+        highl = np.array([200,self.n_zones,self.max_temp_moves_count,20,1])                                           
+        self.vec_ob_space = gym.spaces.Box(lowl, highl, dtype=np.float32)
+        self.observation_space = gym.spaces.Tuple((self.im_ob_space, self.vec_ob_space))
         
         # Modify the action space, and dimension according to your custom
         #environment's needs
         self.action_space = gym.spaces.Discrete(23)
         self.done = False
-        self.current_state = (None,None,None,None,None,None,None)
+        self.current_state = ((),())
         self.current_position = 0
-        self.previous_state = (None,None,None,None,None,None,None)
+        self.previous_state = ((),())
         self.previous_action = None
         #self._spec.id = "Romi-v0"
         self.num_steps = 0
@@ -90,13 +58,8 @@ class ScannerEnv(gym.Env):
         
         self.kept_images = []
         self.dir = 0
-                                               
-        #get simulation images
-        #images_path = '/home/pico/Bilder/gazebo_circle/'
-        #self.imgs = get_images(images_path)
-        #self.orb = cv2.ORB_create(nfeatures=500, scoreType=cv2.ORB_FAST_SCORE)
-        #self.matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
-        #self.match_indexes = np.load('/home/pico/romi/match_indexes.npy')
+        
+        #load precomputed inliers ratios
         self.match_indexes = np.load(inliers_ratios_file)
 
         #every zone is  images long ( degress in this case)
@@ -123,7 +86,7 @@ class ScannerEnv(gym.Env):
         self.num_steps = 0
         self.total_reward = 0
         self.done = False
-        self.previous_state = (None,None,None,None,None,None,None)
+        self.previous_state = ((),())
         self.total_moves = 0
         
         if self.init_pos_inc_rst :
@@ -150,11 +113,13 @@ class ScannerEnv(gym.Env):
         self.previous_ref_img = self.current_position
         self.previous_match_idx = 1.0
         self.previous_distance_to_ref_img=0
+        self.match_idx = 1.0
 
         self.kept_im_map = np.zeros(self.n_positions,dtype='uint')
-        self.kept_im_map[self.current_position] = 1 
+        self.kept_im_map[self.current_position] = 1
 
-        self.current_state = (1.0,0, self.covered_area,self.temp_moves_count,0,0,self.dir)
+        #print(self.previous_match_idx,self.match_idx)
+        self.current_state = ( np.dstack( (self.dataset[self.current_position],self.dataset[self.current_position])) , (0, self.covered_area,self.temp_moves_count,0,self.dir))
         return self.current_state
      
         
@@ -205,23 +170,26 @@ class ScannerEnv(gym.Env):
             self.temp_moves_count = 0
 
             self.previous_ref_img = self.current_position
-            self.previous_match_idx = 1.0
+            self.previous_match_idx = self.match_idx 
             self.previous_distance_to_ref_img=0
 
             self.kept_im_map[self.current_position] = 1
            
             self.previous_state = self.current_state
-            self.current_state = ( 1.0,0,self.covered_area,self.temp_moves_count,0,0,self.dir)
+
+            self.match_idx = 1.0
+            #print(self.previous_match_idx,self.match_idx)
+            self.current_state = ( np.dstack( (self.dataset[self.current_position],self.dataset[self.current_position])) ,(0,self.covered_area,self.temp_moves_count,0,self.dir))
 
         elif action == CLOCKWISE:
             self.dir = 0
             self.temp_moves_count = min( self.temp_moves_count + 1,  self.max_temp_moves_count)
-            self.current_state = (self.current_state[0], self.current_state[1],self.current_state[2],self.temp_moves_count,self.current_state[4],self.current_state[5],self.dir)
+            self.current_state = (self.current_state[0], (self.current_state[1][0],self.current_state[1][1],self.temp_moves_count,self.current_state[1][3],self.dir))
 
         elif action == ANTICLOCKWISE:
             self.dir = 1
             self.temp_moves_count = min( self.temp_moves_count + 1,  self.max_temp_moves_count)
-            self.current_state = (self.current_state[0], self.current_state[1],self.current_state[2],self.temp_moves_count,self.current_state[4],self.current_state[5],self.dir)
+            self.current_state = (self.current_state[0], (self.current_state[1][0],self.current_state[1][1],self.temp_moves_count,self.current_state[1][3],self.dir))
                 
         else:
             #move #set new position
@@ -235,27 +203,27 @@ class ScannerEnv(gym.Env):
 
             closest_kept_img, distance_to_closest_img = self.get_closest_img(self.current_position)
             
-            match_idx = self.match_indexes[self.current_position,closest_kept_img]
+            self.previous_match_idx = self.match_idx
+            self.match_idx = self.match_indexes[self.current_position,closest_kept_img]
             
             area_idx = self.get_area_section_n(self.current_position)
             
             self.temp_moves_count = min( self.temp_moves_count + 1,  self.max_temp_moves_count)
 
-            if closest_kept_img == self.previous_ref_img:
-                delta_match_idx = match_idx - self.previous_match_idx
+            if closest_kept_img == self.previous_ref_img:#if the closest kept image continues to be the same
+                delta_match_idx = self.match_idx - self.previous_match_idx
                 delta_distance_to_ref = distance_to_closest_img - self.previous_distance_to_ref_img
-            else:
+            else: #there is a new closest kept image
                 delta_match_idx = 0
                 delta_distance_to_ref = 0
                 self.previous_ref_img = closest_kept_img
 
-            self.previous_match_idx = match_idx
             self.previous_distance_to_ref_img = distance_to_closest_img
-            
             self.total_moves += 1
             
             self.previous_state = self.current_state
-            self.current_state = (match_idx, distance_to_closest_img,self.covered_area,self.temp_moves_count,delta_match_idx,delta_distance_to_ref,self.dir)
+            #print(self.previous_match_idx,self.match_idx)
+            self.current_state = (  np.dstack( (self.dataset[closest_kept_img],self.dataset[self.current_position]))  ,(distance_to_closest_img,self.covered_area,self.temp_moves_count,delta_distance_to_ref,self.dir) )
             
 
     #def set_collected_imgs_path(self,path):
@@ -267,7 +235,7 @@ class ScannerEnv(gym.Env):
         if action < 20:
             reward = -1.0#-2.0  #-0.5 #
         elif action == KEEP_IMAGE:
-            reward = self.rwd_fn(self.previous_state[0],self.setpoint)
+            reward = self.rwd_fn(self.previous_match_idx,self.setpoint)
         else:
             reward=  0#-1.0#-2.0
         return reward
@@ -361,7 +329,6 @@ class ScannerEnv(gym.Env):
         self.setpoint = setpoint
 
 
-    
     #gets idx ( and distance )of closest kept image (from current postition)
     def get_closest_idx(self,curr_pos,direction):
         if direction == 'right':
