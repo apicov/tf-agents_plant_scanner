@@ -34,7 +34,8 @@ class ScannerEnv(gym.Env):
         self.dataset_path = dataset_path
         self.dataset = self.load_images(self.dataset_path)
         
-        self.im_ob_space = gym.spaces.Box(low=0, high=255, shape=(82,82,2))#, dtype=np.uint8)
+        
+        self.im_ob_space = gym.spaces.Box(low=0, high=255, shape=(224,224,2))#, dtype=np.uint8)
 
         #[distance from closest saved image, covered area (self.n_zones sections), number of actions executed since last save image action,
         # delta distance (diff between las and current distance from closest saved image), 
@@ -74,7 +75,10 @@ class ScannerEnv(gym.Env):
         imgs = []
         img_files = glob.glob(path + '*.jpeg') #get all .jpeg files from folder path
         for i in sorted(img_files):
-            imgs.append(Image.open(i))
+            '''img = Image.open(i)
+            imgs.append(img.copy())
+            img.close()'''
+            imgs.append( np.zeros((224,224,1),dtype=np.float32) )
         return imgs
 
     @property
