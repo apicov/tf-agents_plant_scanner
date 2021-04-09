@@ -1,10 +1,10 @@
 {
- "agent": { "decay_steps": 90000, 
+ "agent": { "decay_steps": 45000, 
             "target_update_period": 100, 
             "gamma": 0.99},
 
  "rbuffer"   : {"max_length": 50000,
-                "sample_batch_size" : 64},
+                "sample_batch_size" : 512},
 
  "rnd_policy" : {   "num_steps": 5000 },
  
@@ -17,6 +17,6 @@
               "learning_rate" : 0.001
             },
             
- "misc" :  { "n_iterations" : 100000
+ "misc" :  { "n_iterations" : 50000
  		}
 }
