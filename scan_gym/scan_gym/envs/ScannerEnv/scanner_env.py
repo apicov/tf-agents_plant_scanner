@@ -228,7 +228,8 @@ class ScannerEnv(gym.Env):
             self.total_moves += 1
             
             self.previous_state = self.current_state
-            self.current_state = (  np.dstack( (self.obs_images[closest_kept_img],self.obs_images[self.current_position]))  ,(distance_to_closest_img,self.covered_area,self.temp_moves_count,delta_distance_to_ref,self.dir) )
+            #self.current_state = (  np.dstack( (self.obs_images[closest_kept_img],self.obs_images[self.current_position]))  ,(distance_to_closest_img,self.covered_area,self.temp_moves_count,delta_distance_to_ref,self.dir) )
+            self.current_state = (  np.dstack( (self.obs_images[closest_kept_img],self.obs_images[self.current_position]))  ,(0,self.covered_area,self.temp_moves_count,0,self.dir) )
             
 
 
