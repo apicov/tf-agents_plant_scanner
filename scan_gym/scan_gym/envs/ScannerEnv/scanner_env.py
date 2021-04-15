@@ -147,17 +147,17 @@ class ScannerEnv(gym.Env):
         if self.temp_moves_count >= self.max_temp_moves_count:
             if self.covered_area>=self.n_zones:
                 cd=self.chamfer_from_collected()
-                reward+= self.minMaxNorm(cd,self.chamfer_limits['max'],self.chamfer_limits['min'],0,500)
+                reward+= self.minMaxNorm(cd,self.chamfer_limits['max'],self.chamfer_limits['min'],0,100)
                 self.done = True
             else:
                 reward += -5
             	
-        if self.num_steps >= 2000:
+        if self.num_steps >= 1000:
             self.done = True
             if self.covered_area>=self.n_zones:
                 cd=self.chamfer_from_collected()
-                reward+= self.minMaxNorm(cd,self.chamfer_limits['max'],self.chamfer_limits['min'],0,500)
-                print(cd)
+                reward+= self.minMaxNorm(cd,self.chamfer_limits['max'],self.chamfer_limits['min'],0,100)
+                #print(cd)
             else:
                 reward -= 100
            

@@ -1,5 +1,5 @@
 {
- "agent": { "decay_steps": 45000, 
+ "agent": { "decay_steps": 90000, 
             "target_update_period": 100, 
             "gamma": 0.99},
 
@@ -17,7 +17,7 @@
               "learning_rate" : 0.001
             },
             
- "misc" :  { "n_iterations" : 50000
+ "misc" :  { "n_iterations" : 100000
  		},
  		
  "comments" : "_"
