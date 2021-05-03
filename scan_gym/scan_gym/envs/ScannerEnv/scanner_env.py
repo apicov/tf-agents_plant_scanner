@@ -3,45 +3,20 @@ import numpy as np
 from os import listdir
 from os.path import isfile, join
 import gym
+import glob
+from PIL import Image
+import open3d as o3d
+from .cl import *
+from skimage.morphology import binary_dilation
+from .proc3d import *
+import json
+from .utils import *
+import glob
+import os
 
 KEEP_IMAGE = 22
 CLOCKWISE = 20
 ANTICLOCKWISE = 21
-
-def ratio_test(matches,ratio_thr):
-    # Apply ratio test
-    good = []
-    for m,n in matches:
-        if m.distance < (ratio_thr*n.distance):
-            good.append(m)
-    return good
-
-def cross_check(matches01,matches10):
-    matches10_ = {(m.trainIdx, m.queryIdx) for m in matches10}
-    final_matches = [m for m in matches01 if (m.queryIdx,m.trainIdx) in matches10_]
-    return final_matches
-
-
-def get_matches(matcher,feat01,feat10):
-    ratio_thr = 0.75
-    matches01 = matcher.knnMatch(feat01,feat10, k=2)
-    matches10 = matcher.knnMatch(feat10,feat01, k=2)
-    good_matches01 = ratio_test(matches01,ratio_thr)
-    good_matches10 = ratio_test(matches10,ratio_thr)
-    matches = cross_check(good_matches01,good_matches10)
-    return matches
-
-
-def get_images(images_path):
-    files = sorted([f for f in listdir(images_path) if isfile(join(images_path, f))])
-    imgs = []
-    for i in files:
-        img = cv2.imread(images_path+i)
-        gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
-        gray = cv2.resize(gray, (320,240), interpolation = cv2.INTER_AREA)
-        imgs.append(gray)
-    return imgs
-
 
 
 class ScannerEnv(gym.Env):
@@ -49,34 +24,53 @@ class ScannerEnv(gym.Env):
     A template to implement custom OpenAI Gym environments
     """
     metadata = {'render.modes': ['human']}
-    def __init__(self,inliers_ratios_file,setpoint=0.1,init_pos_inc_rst=False):
+    def __init__(self,dataset_path,init_pos_inc_rst=False):
         super(ScannerEnv, self).__init__()
         #self.__version__ = "7.0.1"
-        self.n_positions = 1440 #total of posible positions in env
+        self.n_positions = 720 #total of posible positions in env
         self.n_zones = 8 #number of zones by which the circle is divided
-        self.max_temp_moves_count = 10
+        self.max_temp_moves_count = 20
         self.previous_ref_img = 0
-        self.previous_match_idx = 0
         self.previous_distance_to_ref_img=0
-        self.setpoint = setpoint
         self.total_moves = 0
         self.init_pos_inc_rst = init_pos_inc_rst #if false init position is random, if true, it starts in position 0 and increments by 1 position every reset
         self.init_pos_counter = 0
+
+
+        self.obs_images = self.load_images(os.path.join(dataset_path, 'gray_imgs_82'),'png')
+        self.rwd_images = self.load_images(os.path.join(dataset_path, 'imgs'),'png')
+        self.extrinsics = self.load_extrinsics(os.path.join(dataset_path, 'extrinsics'))
+        self.bbox = json.load(open(os.path.join(dataset_path, 'bbox.json')))
+        self.camera_model = json.load(open(os.path.join(dataset_path, 'camera_model.json')))
+        self.intrinsics= self.camera_model['params'][0:4]
+        self.chamfer_limits = json.load(open(os.path.join(dataset_path, 'chamfer_distance_gt_limits.json'))) #minimum and maximun chamfer distances calculated with ground truth model
         
-        #[inliers ratio, distance from closest saved image, covered area (self.n_zones sections), number of actions executed since last save image action,
-        #delta inliers ratio (difference beween last and current in ratio), delta distance (diff between las and current distance from closest saved image), 
+        params = json.load(open(os.path.join(dataset_path, 'params.json')))
+        self.gt=o3d.io.read_point_cloud(params["gt_path"])
+        self.gt_points = np.asarray(self.gt.points)
+        self.n_dilation=params["sc"]["n_dilation"]
+        self.voxel_size = params['sc']['voxel_size']
+        
+        
+        self.set_sc(self.bbox)
+
+        self.im_ob_space = gym.spaces.Box(low=0, high=255, shape=(82,82,2))#, dtype=np.uint8)
+
+        #[distance from closest saved image, covered area (self.n_zones sections), number of actions executed since last save image action,
+        # delta distance (diff between las and current distance from closest saved image), 
         #direction of movement (clockwise or anticlockwise)]                                           
-        lowl = np.array([0,-200,0,0,-1.0,-20,0])
-        highl = np.array([1.0,200,self.n_zones,self.max_temp_moves_count,1.0,20,1])                                           
-        self.observation_space = gym.spaces.Box(lowl, highl, dtype=np.float32)
+        lowl = np.array([-400,0,0,-20,0])
+        highl = np.array([400,self.n_zones,self.max_temp_moves_count,20,1])                                           
+        self.vec_ob_space = gym.spaces.Box(lowl, highl, dtype=np.float32)
+        self.observation_space = gym.spaces.Tuple((self.im_ob_space, self.vec_ob_space))
         
         # Modify the action space, and dimension according to your custom
         #environment's needs
         self.action_space = gym.spaces.Discrete(23)
         self.done = False
-        self.current_state = (None,None,None,None,None,None,None)
+        self.current_state = ((),())
         self.current_position = 0
-        self.previous_state = (None,None,None,None,None,None,None)
+        self.previous_state = ((),())
         self.previous_action = None
         #self._spec.id = "Romi-v0"
         self.num_steps = 0
@@ -84,15 +78,7 @@ class ScannerEnv(gym.Env):
         
         self.kept_images = []
         self.dir = 0
-                                               
-        #get simulation images
-        #images_path = '/home/pico/Bilder/gazebo_circle/'
-        #self.imgs = get_images(images_path)
-        #self.orb = cv2.ORB_create(nfeatures=500, scoreType=cv2.ORB_FAST_SCORE)
-        #self.matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
-        #self.match_indexes = np.load('/home/pico/romi/match_indexes.npy')
-        self.match_indexes = np.load(inliers_ratios_file)
-
+        
         #every zone is  images long ( degress in this case)
         #1 means that there is already a kept pixture in that zone
         self.covered_zones = np.zeros(self.n_zones)
@@ -100,6 +86,7 @@ class ScannerEnv(gym.Env):
 
         #writes a 1 on the index of corresponding kept image
         self.kept_im_map = np.zeros(self.n_positions,dtype='uint')
+        
 
     @property
     def nA(self):
@@ -110,7 +97,7 @@ class ScannerEnv(gym.Env):
         self.num_steps = 0
         self.total_reward = 0
         self.done = False
-        self.previous_state = (None,None,None,None,None,None,None)
+        self.previous_state = ((),())
         self.total_moves = 0
         
         if self.init_pos_inc_rst :
@@ -135,13 +122,13 @@ class ScannerEnv(gym.Env):
         self.temp_moves_count = 0
 
         self.previous_ref_img = self.current_position
-        self.previous_match_idx = 1.0
         self.previous_distance_to_ref_img=0
 
         self.kept_im_map = np.zeros(self.n_positions,dtype='uint')
-        self.kept_im_map[self.current_position] = 1 
+        self.kept_im_map[self.current_position] = 1
 
-        self.current_state = (1.0,0, self.covered_area,self.temp_moves_count,0,0,self.dir)
+        #print(self.previous_match_idx,self.match_idx)
+        self.current_state = ( np.dstack( (self.obs_images[self.current_position],self.obs_images[self.current_position])) , (0, self.covered_area,self.temp_moves_count,0,self.dir))
         return self.current_state
      
         
@@ -159,17 +146,18 @@ class ScannerEnv(gym.Env):
         
         if self.temp_moves_count >= self.max_temp_moves_count:
             if self.covered_area>=self.n_zones:
-                reward += 100
+                cd=self.chamfer_from_collected()
+                reward+= self.minMaxNorm(cd,self.chamfer_limits['max'],self.chamfer_limits['min'],0,100)
                 self.done = True
             else:
                 reward += -5
             	
-        #3000
-        #if self.num_steps >= 1500 or (self.temp_moves_count >=  self.max_temp_moves_count  and self.covered_area==self.n_zones) :
-        if self.num_steps >= 3000:
+        if self.num_steps >= 1000:
             self.done = True
             if self.covered_area>=self.n_zones:
-                reward += 100
+                cd=self.chamfer_from_collected()
+                reward+= self.minMaxNorm(cd,self.chamfer_limits['max'],self.chamfer_limits['min'],0,100)
+                #print(cd)
             else:
                 reward -= 100
            
@@ -178,6 +166,15 @@ class ScannerEnv(gym.Env):
         self.num_steps += 1
 
         return self.current_state, reward, self.done, {}
+
+
+    def chamfer_from_collected(self):
+        del(self.sc)
+        self.set_sc(self.bbox) 
+        for i in self.kept_images:
+            self.carve(i)
+        ch_dist = self.dist_to_gt()
+        return ch_dist
 
     def exec_action(self,action):       
         #keep picture and sum distance
@@ -192,91 +189,62 @@ class ScannerEnv(gym.Env):
             self.temp_moves_count = 0
 
             self.previous_ref_img = self.current_position
-            self.previous_match_idx = 1.0
             self.previous_distance_to_ref_img=0
 
             self.kept_im_map[self.current_position] = 1
            
             self.previous_state = self.current_state
-            self.current_state = ( 1.0,0,self.covered_area,self.temp_moves_count,0,0,self.dir)
+
+            self.current_state = ( np.dstack( (self.obs_images[self.current_position],self.obs_images[self.current_position])) ,(0,self.covered_area,self.temp_moves_count,0,self.dir))
 
         elif action == CLOCKWISE:
             self.dir = 0
             self.temp_moves_count = min( self.temp_moves_count + 1,  self.max_temp_moves_count)
-            self.current_state = (self.current_state[0], self.current_state[1],self.current_state[2],self.temp_moves_count,self.current_state[4],self.current_state[5],self.dir)
+            self.current_state = (self.current_state[0], (self.current_state[1][0],self.current_state[1][1],self.temp_moves_count,self.current_state[1][3],self.dir))
 
         elif action == ANTICLOCKWISE:
             self.dir = 1
             self.temp_moves_count = min( self.temp_moves_count + 1,  self.max_temp_moves_count)
-            self.current_state = (self.current_state[0], self.current_state[1],self.current_state[2],self.temp_moves_count,self.current_state[4],self.current_state[5],self.dir)
+            self.current_state = (self.current_state[0], (self.current_state[1][0],self.current_state[1][1],self.temp_moves_count,self.current_state[1][3],self.dir))
                 
         else:
             #move #set new position
             steps = self.action2move(action,self.dir)
             self.current_position = self.calculate_position(self.current_position,steps)
 
-            #closest_kept_img_idx =  np.argmin( [ abs(self.get_distance_two_positions(self.current_position,x)) for x in self.kept_images] )
-            #closest_kept_img =  self.kept_images[closest_kept_img_idx]
-            #distance_to_closest_img = self.get_distance_two_positions(closest_kept_img,self.current_position)
-
-
             closest_kept_img, distance_to_closest_img = self.get_closest_img(self.current_position)
-            
-            match_idx = self.match_indexes[self.current_position,closest_kept_img]
             
             area_idx = self.get_area_section_n(self.current_position)
             
             self.temp_moves_count = min( self.temp_moves_count + 1,  self.max_temp_moves_count)
 
-            if closest_kept_img == self.previous_ref_img:
-                delta_match_idx = match_idx - self.previous_match_idx
+            if closest_kept_img == self.previous_ref_img:#if the closest kept image continues to be the same
                 delta_distance_to_ref = distance_to_closest_img - self.previous_distance_to_ref_img
-            else:
-                delta_match_idx = 0
+            else: #there is a new closest kept image
                 delta_distance_to_ref = 0
                 self.previous_ref_img = closest_kept_img
 
-            self.previous_match_idx = match_idx
             self.previous_distance_to_ref_img = distance_to_closest_img
-            
             self.total_moves += 1
             
             self.previous_state = self.current_state
-            self.current_state = (match_idx, distance_to_closest_img,self.covered_area,self.temp_moves_count,delta_match_idx,delta_distance_to_ref,self.dir)
+            #self.current_state = (  np.dstack( (self.obs_images[closest_kept_img],self.obs_images[self.current_position]))  ,(distance_to_closest_img,self.covered_area,self.temp_moves_count,delta_distance_to_ref,self.dir) )
+            self.current_state = (  np.dstack( (self.obs_images[closest_kept_img],self.obs_images[self.current_position]))  ,(0,self.covered_area,self.temp_moves_count,0,self.dir) )
             
 
-    #def set_collected_imgs_path(self,path):
-    #    self.c_img_path = path
-        
 
     def calculate_reward(self,action):
         #if camera was moved
         if action < 20:
-            reward = -1.0#-2.0  #-0.5 #
+            reward = -1.0
         elif action == KEEP_IMAGE:
-            reward = self.rwd_fn(self.previous_state[0],self.setpoint)
+            reward = -0.5
         else:
-            reward=  0#-1.0#-2.0
+            reward = 0
         return reward
 
 
-    def rwd_fn(self,midx,setpoint):
-        error = setpoint - midx
-
-        if midx<0.01:
-            return -10
-
-        if error > 0.05 or error < -0.05:
-            return -10
-
-        if error>=0.0:
-            reward = self.minMaxNorm(error,0,0.05,10,0)
-        else:
-            reward = self.minMaxNorm(error,0,-0.05,10,0)
-        return reward
-
-
-
+ 
     def minMaxNorm(self,old, oldmin, oldmax , newmin , newmax):
         return ( (old-oldmin)*(newmax-newmin)/(oldmax-oldmin) ) + newmin
 
@@ -348,7 +316,6 @@ class ScannerEnv(gym.Env):
         self.setpoint = setpoint
 
 
-    
     #gets idx ( and distance )of closest kept image (from current postition)
     def get_closest_idx(self,curr_pos,direction):
         if direction == 'right':
@@ -382,10 +349,55 @@ class ScannerEnv(gym.Env):
        else:
            return lidx,-ldist
 
-       
 
+    def load_extrinsics(self,path):
+        ext = []
+        ext_files = glob.glob(os.path.join(path, '*.json'))
+        assert len(ext_files) != 0,"json list is empty."
+        for i in sorted(ext_files):                                                                                                                                  
+            ext.append(json.load(open(i)))                                                                             
+        return ext 
+    
+    def load_images(self,path,im_type):                                                                                                                                         
+        imgs = []
+        img_files = glob.glob(os.path.join(path, '*.'+im_type)) 
+        assert len(img_files) != 0,"Image list is empty."
+        for i in sorted(img_files):                                                                                                                                     
+            img = Image.open(i)                                                                                                                                      
+            imgs.append(img.copy())                                                                                                                                     
+            img.close()                                                
+        return imgs
 
+    def set_sc(self,bbox):
+        x_min, x_max = bbox['x']
+        y_min, y_max = bbox['y']
+        z_min, z_max = bbox['z']
+
+        nx = int((x_max - x_min) / self.voxel_size) + 1
+        ny = int((y_max - y_min) / self.voxel_size) + 1
+        nz = int((z_max - z_min) / self.voxel_size) + 1
+
+        self.origin = np.array([x_min, y_min, z_min])
+        self.sc = Backprojection([nx, ny, nz], [x_min, y_min, z_min], self.voxel_size)
+
+    def carve(self,idx):
+        self.space_carve(self.rwd_images[idx], self.extrinsics[idx])
         
+    def space_carve(self, im, rt):
+        mask = get_mask(im)
+        rot = sum(rt['R'], [])
+        tvec = rt['T']
+        if self.n_dilation:
+            for k in range(self.n_dilation): mask = binary_dilation(mask)    
+        self.sc.process_view(self.intrinsics, rot, tvec, mask)
+        
+    def dist_to_gt(self):
+        vol = self.sc.values().copy()
+        vol = vol.reshape(self.sc.shape)
+        pcd=vol2pcd_exp(vol, self.origin, self.voxel_size, level_set_value=0) 
+        pcd_p = np.asarray(pcd.points)
+        cd=chamfer_d(self.gt_points , pcd_p)
+        return cd 
             
 
 
